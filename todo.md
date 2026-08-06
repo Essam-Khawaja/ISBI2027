@@ -5,9 +5,9 @@
 We need to see whether a Multi-modal and intermediate fusion model will work better than a sequential model that feeds data into each other one by one.
 
 Sequential:
-CT/PET -> Segementation -> Output 1
-Output 1 + Clinical Data -> Output 2
-Output 2 + Clinical Data -> Output 3
+CT/PET -> Segementation UNet -> Output 1
+Output 1 + Clinical Data -> Random Forest Classification -> Output 2
+Output 2 + Clinical Data -> Random Forest Regression -> Output 3
 
 Multimodal Method:
 CT -> Encoder Output 1
@@ -24,4 +24,4 @@ CT Encoder: 3D Medical Image -> 3D CNN
 PET Encoder: 3D Medical Image -> 3D CNN
 Clinical Encoder: 1D Feature Vector -> Basic MLP (MultiPlayer Perceptron)
 
-Then, we concatenate them into different layers (I think?) and then running another ML model, and then getting the outputs :)
+Then, we concatenate them into different layers (I think?) and then running another ML model, and then getting the outputs)
