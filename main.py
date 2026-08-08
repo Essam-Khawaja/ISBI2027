@@ -7,12 +7,12 @@ import torch
 
 from dataset import HecktorDataset
 
+from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, EnsureTyped
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-CLINICAL_FILE = PROJECT_ROOT / "Data" / "HECKTOR_2026_training_data.csv"
-SPLITS_FILE = PROJECT_ROOT / "Task" / "Segmentation" / "config" / "splits_final.json"
-
+CLINICAL_FILE = PROJECT_ROOT / "data" / "HECKTOR_2026_training_data.csv"
+SPLITS_FILE = PROJECT_ROOT / "data" / "splits_final.json"
 
 CLINICAL_COLUMNS = [
     "Age",
@@ -35,7 +35,6 @@ TARGET_COLUMNS = [
     "RFS",
 ]
 
-
 T_STAGE_MAPPING = {
     "T0": 0.0,
     "T1": 1.0,
@@ -50,7 +49,6 @@ N_STAGE_MAPPING = {
     "N2": 2.0,
     "N3": 3.0,
 }
-
 
 def getDataFolder():
     envDataFolder = os.environ.get("HECKTOR_DATA_ROOT")
@@ -82,9 +80,7 @@ def getDataFolder():
         "Set the HECKTOR_DATA_ROOT environment variable."
     )
 
-
 DATA_FOLDER = getDataFolder()
-
 
 def getCasePaths(dataFolder, caseId):
     caseFolder = Path(dataFolder) / caseId
@@ -95,11 +91,9 @@ def getCasePaths(dataFolder, caseId):
         "label": caseFolder / f"{caseId}.nii.gz",
     }
 
-
 def caseExists(dataFolder, caseId):
     paths = getCasePaths(dataFolder, caseId)
     return all(path.exists() for path in paths.values())
-
 
 def filterAvailableCases(dataFolder, caseIds):
     availableCaseIds = [
@@ -122,7 +116,6 @@ def filterAvailableCases(dataFolder, caseIds):
         )
 
     return availableCaseIds
-
 
 def loadSplit(foldIndex=0):
     if not SPLITS_FILE.exists():
@@ -157,7 +150,6 @@ def loadSplit(foldIndex=0):
     print("Validation patients:", len(valIds))
 
     return trainIds, valIds
-
 
 def loadClinicalData():
     if not CLINICAL_FILE.exists():
@@ -216,6 +208,12 @@ def loadClinicalData():
 
     return clinicalData
 
+def getLoadTransform():
+    return Compose([
+        LoadImaged(keys=["ct", "pet", "label"]),
+        EnsureChannelFirstd(keys=["ct", "pet", "label"]),
+        EnsureTyped(keys=["ct", "pet", "label"]),
+    ])
 
 def preprocessClinicalData(clinicalData, trainIds):
     clinicalData = clinicalData.copy()
@@ -225,9 +223,7 @@ def preprocessClinicalData(clinicalData, trainIds):
     ]
 
     if trainRows.empty:
-        raise ValueError(
-            "Dude none of the training IDs matched the clinical CSV."
-        )
+        raise ValueError("Dude none of the training IDs matched the clinical CSV.")
 
     # Learn replacement values only from training patients.
     # This prevents validation information from leaking into training.
@@ -245,10 +241,7 @@ def preprocessClinicalData(clinicalData, trainIds):
         clinicalData[column] = clinicalData[column].fillna(medianValue)
 
     remainingMissingFeatures = (
-        clinicalData[CLINICAL_COLUMNS]
-        .isna()
-        .sum()
-        .sum()
+        clinicalData[CLINICAL_COLUMNS].isna().sum().sum()
     )
 
     if remainingMissingFeatures:
@@ -267,7 +260,6 @@ def preprocessClinicalData(clinicalData, trainIds):
 
     return clinicalData
 
-
 def getDevice():
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -277,9 +269,9 @@ def getDevice():
 
     return torch.device("cpu")
 
-
 def main():
     device = getDevice()
+    loadTransform = getLoadTransform()
 
     print("Using device:", device)
     print("Project root:", PROJECT_ROOT)
@@ -302,7 +294,7 @@ def main():
         clinicalColumns=CLINICAL_COLUMNS,
         targetColumns=TARGET_COLUMNS,
         caseIds=trainIds,
-        transform=None
+        transform=loadTransform
     )
 
     valDataset = HecktorDataset(
@@ -312,7 +304,7 @@ def main():
         clinicalColumns=CLINICAL_COLUMNS,
         targetColumns=TARGET_COLUMNS,
         caseIds=valIds,
-        transform=None
+        transform=loadTransform
     )
 
     print("\nTrain dataset size:", len(trainDataset))
@@ -321,13 +313,18 @@ def main():
     patient = trainDataset[0]
 
     print("\nLoaded patient:", patient["caseId"])
-    print("CT:", patient["ct"])
-    print("PET:", patient["pet"])
-    print("Label:", patient["label"])
+
+    print("CT shape:", patient["ct"].shape)
+    print("PET shape:", patient["pet"].shape)
+    print("Label shape:", patient["label"].shape)
+
+    print("CT dtype:", patient["ct"].dtype)
+    print("PET dtype:", patient["pet"].dtype)
+    print("Label dtype:", patient["label"].dtype)
+
     print("Clinical:", patient["clinical"])
     print("Targets:", patient["targets"])
     print("Target available:", patient["targetMask"])
-
 
 if __name__ == "__main__":
     main()

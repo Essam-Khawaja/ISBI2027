@@ -24,4 +24,8 @@ CT Encoder: 3D Medical Image -> 3D CNN
 PET Encoder: 3D Medical Image -> 3D CNN
 Clinical Encoder: 1D Feature Vector -> Basic MLP (MultiPlayer Perceptron)
 
-Then, we concatenate them into different layers (I think?) and then running another ML model, and then getting the outputs)
+Then, we concatenate them into different layers (I think?) and then running another ML model, and then getting the outputs
+
+
+# VENV Command
+source ~/.venvs/isbi2027/bin/activate
