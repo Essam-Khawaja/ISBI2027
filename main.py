@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader
 
 from dataset import HecktorDataset
+from fusionModel import FusionModel
 
 from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, EnsureTyped
 
@@ -21,8 +23,7 @@ CLINICAL_COLUMNS = [
     "Alcohol Consumption",
     "Performance Status",
     "Treatment",
-    "T-stage",
-    "N-stage",
+    "HPV Status",
 ]
 
 # Order matters later:
@@ -30,9 +31,10 @@ CLINICAL_COLUMNS = [
 # targets[1] = relapse/event indicator
 # targets[2] = RFS time
 TARGET_COLUMNS = [
-    "HPV Status",
     "Relapse",
     "RFS",
+    "T-stage",
+    "N-stage",
 ]
 
 T_STAGE_MAPPING = {
@@ -83,7 +85,7 @@ def getDataFolder():
 DATA_FOLDER = getDataFolder()
 
 def getCasePaths(dataFolder, caseId):
-    caseFolder = Path(dataFolder) / caseId
+    caseFolder = Path(dataFolder) / caseId / "preprocessed"
 
     return {
         "ct": caseFolder / f"{caseId}__CT.nii.gz",
@@ -271,60 +273,53 @@ def getDevice():
 
 def main():
     device = getDevice()
-    loadTransform = getLoadTransform()
 
     print("Using device:", device)
-    print("Project root:", PROJECT_ROOT)
-    print("Clinical file:", CLINICAL_FILE)
-    print("Splits file:", SPLITS_FILE)
     print("Data folder:", DATA_FOLDER)
+    print("Clinical columns:", CLINICAL_COLUMNS)
+    print("Target columns:", TARGET_COLUMNS)
 
     trainIds, valIds = loadSplit(foldIndex=0)
 
     clinicalData = loadClinicalData()
-    clinicalData = preprocessClinicalData(
-        clinicalData=clinicalData,
-        trainIds=trainIds
-    )
+    clinicalData = preprocessClinicalData(clinicalData, trainIds)
 
-    trainDataset = HecktorDataset(
+    dataset = HecktorDataset(
         dataFolder=DATA_FOLDER,
         clinicalData=clinicalData,
         patientIdColumn="PatientID",
         clinicalColumns=CLINICAL_COLUMNS,
         targetColumns=TARGET_COLUMNS,
         caseIds=trainIds,
-        transform=loadTransform
+        transform=getLoadTransform(),
     )
 
-    valDataset = HecktorDataset(
-        dataFolder=DATA_FOLDER,
-        clinicalData=clinicalData,
-        patientIdColumn="PatientID",
-        clinicalColumns=CLINICAL_COLUMNS,
-        targetColumns=TARGET_COLUMNS,
-        caseIds=valIds,
-        transform=loadTransform
-    )
+    loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
-    print("\nTrain dataset size:", len(trainDataset))
-    print("Validation dataset size:", len(valDataset))
+    batch = next(iter(loader))
 
-    patient = trainDataset[0]
+    ct = batch["ct"].to(device).float()
+    pet = batch["pet"].to(device).float()
+    clinical = batch["clinical"].to(device).float()
 
-    print("\nLoaded patient:", patient["caseId"])
+    model = FusionModel().to(device)
+    model.eval()
 
-    print("CT shape:", patient["ct"].shape)
-    print("PET shape:", patient["pet"].shape)
-    print("Label shape:", patient["label"].shape)
+    with torch.no_grad():
+        outputs = model(ct, pet, clinical)
 
-    print("CT dtype:", patient["ct"].dtype)
-    print("PET dtype:", patient["pet"].dtype)
-    print("Label dtype:", patient["label"].dtype)
+    print("\nCase:", batch["caseId"])
+    print("CT:", ct.shape)
+    print("PET:", pet.shape)
+    print("Clinical:", clinical.shape)
+    print("Targets:", batch["targets"])
+    print("Target available:", batch["targetMask"])
 
-    print("Clinical:", patient["clinical"])
-    print("Targets:", patient["targets"])
-    print("Target available:", patient["targetMask"])
+    print("\nOutputs:")
+    print("T-stage:", outputs["tStage"].shape)
+    print("N-stage:", outputs["nStage"].shape)
+    print("RFS:", outputs["rfs"].shape)
+
 
 if __name__ == "__main__":
     main()

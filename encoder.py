@@ -2,6 +2,28 @@ import torch
 from torch import nn
 
 
+# TODO: Build ClinicalEncoder
+
+class ClinicalEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.linear1 = nn.Linear(in_features=7, out_features=16, bias=True)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.1, inplace=False)
+
+        self.linear2 = nn.Linear(in_features=16, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.linear2(x)
+        x = self.relu(x)
+
+        return x
+
 class Encoder3D(nn.Module):
     def __init__(self):
         super().__init__()
