@@ -45,7 +45,7 @@ class HecktorDataset(Dataset):
         return len(self.caseIds)
 
     def getPatientPaths(self, caseId):
-        patientFolder = self.dataFolder / caseId
+        patientFolder = self.dataFolder / caseId / "preprocessed"
 
         ctPath = patientFolder / f"{caseId}__CT.nii.gz"
         petPath = patientFolder / f"{caseId}__PT.nii.gz"
