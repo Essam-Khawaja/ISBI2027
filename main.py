@@ -27,9 +27,10 @@ CLINICAL_COLUMNS = [
 ]
 
 # Order matters later:
-# targets[0] = HPV
-# targets[1] = relapse/event indicator
-# targets[2] = RFS time
+# targets[0] = relapse/event indicator
+# targets[1] = RFS time
+# targets[2] = T-stage class
+# targets[3] = N-stage class
 TARGET_COLUMNS = [
     "Relapse",
     "RFS",
