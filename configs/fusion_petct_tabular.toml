@@ -1,0 +1,54 @@
+experiment_name = "fusion_petct_tabular"
+seed = 42
+deterministic = true
+
+[device]
+name = "auto"
+
+[paths]
+metadata_csv = "data/HECKTOR_2026_training_data_with_petct_features.csv"
+splits_file = "data/splits_final.json"
+output_dir = "runs"
+data_root_env = "HECKTOR_DATA_ROOT"
+data_root = ""
+
+[split]
+fold = 0
+
+[features]
+sets = ["clinical", "tumor"]
+columns = []
+standardize = true
+
+[image]
+modalities = ["ct", "pet"]
+crop_shape = [128, 128, 128]
+normalization = "zscore"
+
+[model]
+name = "fusion_petct_tabular"
+image_channels = [8, 16, 32]
+image_embedding_dim = 64
+tabular_hidden_dims = [128, 64]
+tabular_embedding_dim = 32
+fusion_hidden_dims = [64]
+dropout = 0.2
+
+[targets]
+tasks = ["t_stage", "n_stage", "relapse", "rfs"]
+
+[loss_weights]
+t_stage = 1.0
+n_stage = 1.0
+relapse = 1.0
+rfs = 0.1
+
+[training]
+epochs = 20
+batch_size = 1
+num_workers = 0
+learning_rate = 0.0001
+weight_decay = 0.0001
+max_train_batches = 0
+max_val_batches = 0
+

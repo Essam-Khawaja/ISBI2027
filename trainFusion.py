@@ -1,4 +1,5 @@
 import argparse
+import csv
 from pathlib import Path
 
 import torch
@@ -15,6 +16,12 @@ RELAPSE_INDEX = 0
 RFS_INDEX = 1
 T_STAGE_INDEX = 2
 N_STAGE_INDEX = 3
+
+def setSeed(seed, device):
+    torch.manual_seed(seed)
+
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(seed)
 
 def makeDatasets(foldIndex):
     trainIds, valIds = loadSplit(foldIndex=foldIndex)
@@ -129,6 +136,112 @@ def computeLoss(outputs, batch, lossFunctions, device, rfsWeight):
 
     return totalLoss, lossParts
 
+def makeMetricState():
+    return {
+        "tCorrect": 0,
+        "tTotal": 0,
+        "tClassCorrect": [0, 0, 0, 0, 0],
+        "tClassTotal": [0, 0, 0, 0, 0],
+        "nCorrect": 0,
+        "nTotal": 0,
+        "nClassCorrect": [0, 0, 0, 0],
+        "nClassTotal": [0, 0, 0, 0],
+        "rfsAbsError": 0.0,
+        "rfsTotal": 0,
+    }
+
+def updateClassMetrics(state, logits, targets, validMask, prefix, numClasses):
+    if not validMask.any().item():
+        return
+
+    predictions = torch.argmax(logits[validMask], dim=1).detach().cpu()
+    labels = targets[validMask].long().detach().cpu()
+
+    for prediction, label in zip(predictions, labels):
+        prediction = int(prediction.item())
+        label = int(label.item())
+
+        if label < 0 or label >= numClasses:
+            continue
+
+        state[f"{prefix}Total"] += 1
+        state[f"{prefix}ClassTotal"][label] += 1
+
+        if prediction == label:
+            state[f"{prefix}Correct"] += 1
+            state[f"{prefix}ClassCorrect"][label] += 1
+
+def updateRfsMetrics(state, rfsPrediction, rfsTarget, validMask):
+    if not validMask.any().item():
+        return
+
+    prediction = rfsPrediction[validMask].detach().cpu()
+    target = torch.log1p(rfsTarget[validMask]).unsqueeze(1).detach().cpu()
+    absError = torch.abs(prediction - target)
+
+    state["rfsAbsError"] += float(absError.sum().item())
+    state["rfsTotal"] += int(absError.numel())
+
+def updateMetrics(state, outputs, batch, device):
+    targets = batch["targets"].to(device)
+    targetMask = batch["targetMask"].to(device)
+
+    rfs = targets[:, RFS_INDEX]
+    tStage = targets[:, T_STAGE_INDEX]
+    nStage = targets[:, N_STAGE_INDEX]
+
+    updateClassMetrics(
+        state=state,
+        logits=outputs["tStage"],
+        targets=tStage,
+        validMask=targetMask[:, T_STAGE_INDEX],
+        prefix="t",
+        numClasses=5,
+    )
+
+    updateClassMetrics(
+        state=state,
+        logits=outputs["nStage"],
+        targets=nStage,
+        validMask=targetMask[:, N_STAGE_INDEX],
+        prefix="n",
+        numClasses=4,
+    )
+
+    updateRfsMetrics(
+        state=state,
+        rfsPrediction=outputs["rfs"],
+        rfsTarget=rfs,
+        validMask=targetMask[:, RFS_INDEX],
+    )
+
+def safeDivide(numerator, denominator):
+    if denominator == 0:
+        return float("nan")
+
+    return numerator / denominator
+
+def balancedAccuracy(classCorrect, classTotal):
+    classAccuracies = [
+        safeDivide(correct, total)
+        for correct, total in zip(classCorrect, classTotal)
+        if total > 0
+    ]
+
+    if not classAccuracies:
+        return float("nan")
+
+    return sum(classAccuracies) / len(classAccuracies)
+
+def finishMetrics(state):
+    return {
+        "tAccuracy": safeDivide(state["tCorrect"], state["tTotal"]),
+        "tBalancedAccuracy": balancedAccuracy(state["tClassCorrect"], state["tClassTotal"]),
+        "nAccuracy": safeDivide(state["nCorrect"], state["nTotal"]),
+        "nBalancedAccuracy": balancedAccuracy(state["nClassCorrect"], state["nClassTotal"]),
+        "rfsLogMae": safeDivide(state["rfsAbsError"], state["rfsTotal"]),
+    }
+
 def trainOneBatch(model, trainLoader, optimizer, lossFunctions, device, rfsWeight):
     model.train()
 
@@ -175,6 +288,7 @@ def validateOneEpoch(model, valLoader, lossFunctions, device, rfsWeight, maxBatc
 
     totalLoss = 0.0
     batchCount = 0
+    metricState = makeMetricState()
 
     with torch.no_grad():
         for batch in valLoader:
@@ -182,6 +296,7 @@ def validateOneEpoch(model, valLoader, lossFunctions, device, rfsWeight, maxBatc
 
             outputs = model(ct, pet, clinical)
             loss, lossParts = computeLoss(outputs, batch, lossFunctions, device, rfsWeight)
+            updateMetrics(metricState, outputs, batch, device)
 
             totalLoss += loss.item()
             batchCount += 1
@@ -189,9 +304,9 @@ def validateOneEpoch(model, valLoader, lossFunctions, device, rfsWeight, maxBatc
             if maxBatches and batchCount >= maxBatches:
                 break
 
-    return totalLoss / batchCount
+    return totalLoss / batchCount, finishMetrics(metricState)
 
-def saveCheckpoint(model, optimizer, foldIndex, epoch, trainLoss, valLoss, outputFolder):
+def saveCheckpoint(model, optimizer, foldIndex, epoch, trainLoss, valLoss, valMetrics, args, outputFolder):
     outputFolder.mkdir(parents=True, exist_ok=True)
 
     checkpointPath = outputFolder / f"fusion_fold{foldIndex}_epoch{epoch}.pt"
@@ -204,15 +319,64 @@ def saveCheckpoint(model, optimizer, foldIndex, epoch, trainLoss, valLoss, outpu
             "optimizerState": optimizer.state_dict(),
             "trainLoss": trainLoss,
             "valLoss": valLoss,
+            "valMetrics": valMetrics,
             "clinicalColumns": CLINICAL_COLUMNS,
             "targetColumns": TARGET_COLUMNS,
+            "args": vars(args),
         },
         checkpointPath
     )
 
     return checkpointPath
 
+def saveEpochLog(foldIndex, epoch, trainLoss, valLoss, valMetrics, outputFolder):
+    outputFolder.mkdir(parents=True, exist_ok=True)
+
+    logPath = outputFolder / f"fusion_fold{foldIndex}_log.csv"
+    fieldNames = [
+        "fold",
+        "epoch",
+        "trainLoss",
+        "valLoss",
+        "tAccuracy",
+        "tBalancedAccuracy",
+        "nAccuracy",
+        "nBalancedAccuracy",
+        "rfsLogMae",
+    ]
+
+    row = {
+        "fold": foldIndex,
+        "epoch": epoch,
+        "trainLoss": trainLoss,
+        "valLoss": valLoss,
+        **valMetrics,
+    }
+
+    writeHeader = not logPath.exists()
+
+    with open(logPath, "a", newline="") as logFile:
+        writer = csv.DictWriter(logFile, fieldnames=fieldNames)
+
+        if writeHeader:
+            writer.writeheader()
+
+        writer.writerow(row)
+
+    return logPath
+
+def formatMetrics(metrics):
+    return (
+        f"T acc {metrics['tAccuracy']:.4f} | "
+        f"T bal {metrics['tBalancedAccuracy']:.4f} | "
+        f"N acc {metrics['nAccuracy']:.4f} | "
+        f"N bal {metrics['nBalancedAccuracy']:.4f} | "
+        f"RFS log MAE {metrics['rfsLogMae']:.4f}"
+    )
+
 def trainFold(args, foldIndex, device):
+    setSeed(args.seed + foldIndex, device)
+
     print("\n" + "=" * 60)
     print("Starting fold:", foldIndex)
     print("=" * 60)
@@ -257,7 +421,7 @@ def trainFold(args, foldIndex, device):
             maxBatches=args.maxTrainBatches
         )
 
-        valLoss = validateOneEpoch(
+        valLoss, valMetrics = validateOneEpoch(
             model=model,
             valLoader=valLoader,
             lossFunctions=lossFunctions,
@@ -268,8 +432,19 @@ def trainFold(args, foldIndex, device):
 
         print(
             f"Fold {foldIndex} | epoch {epoch}/{args.epochs} | "
-            f"train loss {trainLoss:.4f} | val loss {valLoss:.4f}"
+            f"train loss {trainLoss:.4f} | val loss {valLoss:.4f} | "
+            f"{formatMetrics(valMetrics)}"
         )
+
+        logPath = saveEpochLog(
+            foldIndex=foldIndex,
+            epoch=epoch,
+            trainLoss=trainLoss,
+            valLoss=valLoss,
+            valMetrics=valMetrics,
+            outputFolder=Path(args.outputFolder)
+        )
+        print("Updated log:", logPath)
 
         shouldSave = not args.saveBestOnly or bestValLoss is None or valLoss < bestValLoss
 
@@ -282,6 +457,8 @@ def trainFold(args, foldIndex, device):
                 epoch=epoch,
                 trainLoss=trainLoss,
                 valLoss=valLoss,
+                valMetrics=valMetrics,
+                args=args,
                 outputFolder=Path(args.outputFolder)
             )
             print("Saved checkpoint:", checkpointPath)
@@ -297,6 +474,7 @@ def parseArgs():
     parser.add_argument("--learning-rate", dest="learningRate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", dest="weightDecay", type=float, default=1e-4)
     parser.add_argument("--rfs-weight", dest="rfsWeight", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-train-batches", dest="maxTrainBatches", type=int, default=None)
     parser.add_argument("--max-val-batches", dest="maxValBatches", type=int, default=None)
     parser.add_argument("--output-folder", dest="outputFolder", default="checkpoints")
