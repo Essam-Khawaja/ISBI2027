@@ -1,3 +1,5 @@
+# For ARC baseline jobs, install requirements-arc.txt instead (CUDA 12.6).
+tomli==2.2.1; python_version < "3.11"
 cuda-bindings==13.3.1
 cuda-pathfinder==1.6.0
 cuda-toolkit==13.0.3.0

@@ -14,6 +14,8 @@ if [ "$#" -gt 0 ]; then
 fi
 EXTRA_ARGS=("$@")
 DATA_ROOT="${HECKTOR_DATA_ROOT:-}"
+VENV_PATH="${ISBI2027_VENV:-${HOME}/.venvs/isbi2027}"
+export PYTHONUNBUFFERED=1
 
 mkdir -p logs
 
@@ -27,18 +29,41 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     nvidia-smi
 fi
 
-if [ -f "${HOME}/.venvs/isbi2027/bin/activate" ]; then
-    source "${HOME}/.venvs/isbi2027/bin/activate"
+if [ -f "${VENV_PATH}/bin/activate" ]; then
+    source "${VENV_PATH}/bin/activate"
 else
-    echo "Missing virtual environment: ${HOME}/.venvs/isbi2027"
-    echo "Create it before submitting this job."
+    echo "Missing virtual environment: ${VENV_PATH}"
+    echo "See slurm/README.md for ARC environment setup."
     exit 1
 fi
 
-python -c "import torch, pandas, numpy, nibabel; print('Python environment OK'); print('torch', torch.__version__); print('cuda', torch.cuda.is_available())"
+MODEL_NAME=$(python -c 'import sys; from src.config import load_config; print(load_config(sys.argv[1])["model"]["name"])' "${CONFIG_PATH}")
 
-if grep -q 'name = "clinical_only"' "${CONFIG_PATH}"; then
-    python -m src.smoke_check --config "${CONFIG_PATH}" "${EXTRA_ARGS[@]}"
+python - "${MODEL_NAME}" <<'PY'
+import sys
+import torch
+import pandas
+import numpy
+import nibabel
+
+print("Python:", sys.executable)
+print("torch:", torch.__version__)
+print("PyTorch CUDA runtime:", torch.version.cuda)
+if sys.argv[1] != "clinical_only":
+    if not torch.cuda.is_available():
+        raise SystemExit(
+            "CUDA unavailable: imaging/fusion ARC jobs require a GPU allocation "
+            "and a compatible PyTorch build. Install requirements-arc.txt in "
+            "a fresh environment; see slurm/README.md."
+        )
+    torch.ones(1, device="cuda").sum().item()
+    print("GPU:", torch.cuda.get_device_name(0))
+print("Environment preflight passed.")
+PY
+
+if [ "${MODEL_NAME}" = "clinical_only" ]; then
+    DEVICE="cpu"
+    python -m src.smoke_check --config "${CONFIG_PATH}" "${EXTRA_ARGS[@]}" --device "${DEVICE}"
 else
     if [ -z "${DATA_ROOT}" ]; then
         echo "HECKTOR_DATA_ROOT must be set for imaging/fusion experiments."
@@ -46,7 +71,8 @@ else
     fi
 
     export HECKTOR_DATA_ROOT="${DATA_ROOT}"
-    python -m src.smoke_check --config "${CONFIG_PATH}" --require-images "${EXTRA_ARGS[@]}"
+    DEVICE="cuda"
+    python -m src.smoke_check --config "${CONFIG_PATH}" --require-images "${EXTRA_ARGS[@]}" --device "${DEVICE}"
 fi
 
-python -m src.train --config "${CONFIG_PATH}" "${EXTRA_ARGS[@]}"
+python -m src.train --config "${CONFIG_PATH}" "${EXTRA_ARGS[@]}" --device "${DEVICE}"

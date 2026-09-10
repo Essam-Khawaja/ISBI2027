@@ -1,5 +1,9 @@
 from pathlib import Path
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # Python 3.10 compatibility.
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -67,4 +71,3 @@ def apply_cli_overrides(config, args):
             set_nested(config, keys, value)
 
     return config
-
