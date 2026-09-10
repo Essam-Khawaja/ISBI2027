@@ -14,7 +14,7 @@ if [ "$#" -gt 0 ]; then
 fi
 EXTRA_ARGS=("$@")
 DATA_ROOT="${HECKTOR_DATA_ROOT:-}"
-VENV_PATH="${ISBI2027_VENV:-${HOME}/.venvs/isbi2027}"
+VENV_PATH="${ISBI2027_VENV:-${PWD}/.venv}"
 export PYTHONUNBUFFERED=1
 
 mkdir -p logs

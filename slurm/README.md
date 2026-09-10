@@ -5,20 +5,23 @@ module already available in your session. The baseline pipeline uses
 `requirements-arc.txt`; the original `requirements.txt` pins CUDA 13 packages
 that are incompatible with the reported ARC driver 560.35.03.
 
-Create a separate environment so the existing installation is preserved:
+Create the environment inside the repository (the `.venv` directory is
+already ignored by Git):
 
 ```bash
-python -m venv "$HOME/.venvs/isbi2027-cu126"
-source "$HOME/.venvs/isbi2027-cu126/bin/activate"
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-arc.txt
 python -m pip check
-export ISBI2027_VENV="$HOME/.venvs/isbi2027-cu126"
+unset ISBI2027_VENV
 mkdir -p logs
 ```
 
-Export `ISBI2027_VENV` again when submitting from a new shell. Without it,
-the script uses `$HOME/.venvs/isbi2027` for compatibility with existing setups.
+Activate it in a new shell with `source .venv/bin/activate`. Submit jobs from
+the repository root; the script activates `.venv` automatically. No environment
+path export is needed. `ISBI2027_VENV` remains an optional override for a different
+environment; unset any old value to use the repository environment.
 Do not install the original requirements file into this ARC environment.
 MONAI and the legacy scripts are outside this minimal baseline environment.
 
